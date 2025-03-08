@@ -56,7 +56,7 @@ type cachedStaticFile struct {
 	Error        error // If there was an error compressing the file, then this is it
 }
 
-// absRoot is the root content path.
+// fsRootDir is the root content path.
 // apiRoutes are special routes such as /api, which should not serve up your index.html,
 // but return a 404 instead.
 // The assumption is that your SPA's router module figures out which page to show based
@@ -102,31 +102,6 @@ func NewCachedStaticFileServer(fsys fs.FS, fsRootDir string, apiRoutes []string,
 		indexIntercept:      indexIntercept,
 		modTime:             modTime,
 	}, nil
-}
-
-func globRecursive(fsys fs.FS, root string) ([]string, error) {
-	files := []string{}
-
-	// The +1 is to remove the leading slash (which is applicable on embedded files)
-	chopPrefix := len(root) + 1
-
-	if root == "." || root == "" {
-		// This path is for physical filesystem (not embedded)
-		root = "." // WalkDir needs a non-empty root
-		chopPrefix = 0
-	}
-
-	err := fs.WalkDir(fsys, root, func(path string, d fs.DirEntry, err error) error {
-		if d == nil && err != nil {
-			// root scan failed
-			return err
-		}
-		if !d.IsDir() {
-			files = append(files, path[chopPrefix:])
-		}
-		return nil
-	})
-	return files, err
 }
 
 func (s *CachedStaticFileServer) ServeFile(w http.ResponseWriter, r *http.Request, relPath string, maxAgeSeconds int) {
