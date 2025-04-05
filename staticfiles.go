@@ -35,11 +35,10 @@ type CachedStaticFileServer struct {
 	log            logs.Log
 	compressLevel  int
 	verbose        bool
+	flags          Flags
 	apiRoutes      []string         // Any path that begins with an item from apiRoutes produces a 404
 	indexIntercept http.HandlerFunc // optional callback during index.html serving (creating for auth hotlink functionality)
 	modTime        time.Time        // When we embed files, we Stat() returns a zero time, so we need an alternative
-
-	immutableFilesystem bool // If true, then assume that static files never change (true when running a Docker image)
 
 	compressExtensions map[string]bool // Compress filenames with these extensions
 
@@ -56,6 +55,14 @@ type cachedStaticFile struct {
 	Error        error // If there was an error compressing the file, then this is it
 }
 
+// Flags to the CachedStaticFileServer
+type Flags int
+
+const (
+	FlagAllowHtmlSuffixOmit Flags = 1 << iota // Allow /login to return /login.html (and likewise for any .html file)
+	FlagImmutableFilesystem                   // If true, then assume that static files never change (eg this is true when running a Docker image)
+)
+
 // fsRootDir is the root content path.
 // apiRoutes are special routes such as /api, which should not serve up your index.html,
 // but return a 404 instead.
@@ -63,7 +70,7 @@ type cachedStaticFile struct {
 // on the URL, but from the server's perspective, everything except for apiRoutes serves
 // up index.html
 // indexIntercept can be used to modify a request/response to index.html.
-func NewCachedStaticFileServer(fsys fs.FS, fsRootDir string, apiRoutes []string, log logs.Log, immutableFilesystem bool, indexIntercept http.HandlerFunc) (*CachedStaticFileServer, error) {
+func NewCachedStaticFileServer(fsys fs.FS, fsRootDir string, apiRoutes []string, log logs.Log, indexIntercept http.HandlerFunc, flags Flags) (*CachedStaticFileServer, error) {
 	extensions := map[string]bool{
 		"css":  true,
 		"js":   true,
@@ -90,17 +97,17 @@ func NewCachedStaticFileServer(fsys fs.FS, fsRootDir string, apiRoutes []string,
 	// From the above numbers, it's not worth it raising the compression level to 9.
 
 	return &CachedStaticFileServer{
-		fsys:                fsys,
-		fsRootDir:           fsRootDir,
-		apiRoutes:           apiRoutes,
-		log:                 log,
-		verbose:             false,
-		compressLevel:       5,
-		immutableFilesystem: immutableFilesystem,
-		compressExtensions:  extensions,
-		files:               map[string]*cachedStaticFile{},
-		indexIntercept:      indexIntercept,
-		modTime:             modTime,
+		fsys:               fsys,
+		fsRootDir:          fsRootDir,
+		apiRoutes:          apiRoutes,
+		log:                log,
+		verbose:            false,
+		compressLevel:      5,
+		flags:              flags,
+		compressExtensions: extensions,
+		files:              map[string]*cachedStaticFile{},
+		indexIntercept:     indexIntercept,
+		modTime:            modTime,
 	}, nil
 }
 
@@ -111,13 +118,18 @@ func (s *CachedStaticFileServer) ServeFile(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Chop off leading slash
+	if strings.HasPrefix(relPath, "/") {
+		relPath = relPath[1:]
+	}
+
 	readerCanGzip := strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
 	isCompressible := s.isCompressible(relPath) && readerCanGzip
 	var cachedFile *cachedStaticFile
 
 	// If immutable, then we can check the cache first
 	// This is the expected 99.999% code path for compressed files, when running in production
-	if isCompressible && s.immutableFilesystem {
+	if isCompressible && s.immutableFilesystem() {
 		s.filesLock.Lock()
 		cachedFile = s.files[relPath]
 		busyOrDone := cachedFile != nil
@@ -133,13 +145,7 @@ func (s *CachedStaticFileServer) ServeFile(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	if s.fsRootDir == "" && strings.HasPrefix(relPath, "/") {
-		// Chop off leading slash for the case where our root directory is the root of the filesystem.
-		// This path is hit when serving up hot reloadable content from a real file system (not embedded file).
-		relPath = relPath[1:]
-	}
-
-	file, err := s.fsys.Open(s.fsRootDir + relPath)
+	file, err := s.fsys.Open(path.Join(s.fsRootDir, relPath))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			w.WriteHeader(404)
@@ -189,7 +195,7 @@ func (s *CachedStaticFileServer) ServeFile(w http.ResponseWriter, r *http.Reques
 	// 1. immutableFilesystem is true, and it is our job to compress the file
 	// 2. immutableFilesystem is false, and we need to check if the cached file is valid, and proceed down that path
 
-	if !s.immutableFilesystem {
+	if !s.immutableFilesystem() {
 		// This is similar logic to the caching block at the top of the file, but we need to be doing this down here,
 		// because we now have the LastModified time of the file on disk.
 		s.filesLock.Lock()
@@ -246,6 +252,10 @@ func (s *CachedStaticFileServer) ServeFile(w http.ResponseWriter, r *http.Reques
 	s.serveCachedFile(w, r, cachedFile, maxAgeSeconds)
 }
 
+func (s *CachedStaticFileServer) immutableFilesystem() bool {
+	return s.flags&FlagImmutableFilesystem != 0
+}
+
 func (s *CachedStaticFileServer) isCompressible(filename string) bool {
 	ext := path.Ext(filename)
 	if len(ext) == 0 {
@@ -287,9 +297,9 @@ func (s *CachedStaticFileServer) serveCachedFile(w http.ResponseWriter, r *http.
 
 func (s *CachedStaticFileServer) fileExists(file string) bool {
 	// remove the leading slash, because os.DirFS() doesn't like it
-	if strings.HasPrefix(file, "/") {
-		file = file[1:]
-	}
+	//if strings.HasPrefix(file, "/") {
+	//	file = file[1:]
+	//}
 
 	if s.fsRootDir != "" {
 		file = path.Join(s.fsRootDir, file)
@@ -314,13 +324,40 @@ func (s *CachedStaticFileServer) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	// Chop off leading slash
+	if strings.HasPrefix(path, "/") {
+		path = path[1:]
+	}
+
+	if s.flags&FlagAllowHtmlSuffixOmit != 0 {
+		lastDot := strings.LastIndex(path, ".")
+		if lastDot == -1 || len(path)-lastDot > 5 {
+			// The file has no extension, so it might be .html
+			withHtml := path + ".html"
+			isHtml := false
+			// Check if the file is in our cache
+			s.filesLock.Lock()
+			if s.files[withHtml] != nil {
+				isHtml = true
+			}
+			s.filesLock.Unlock()
+			if !isHtml {
+				// Ask the filesystem if <path>.html exists
+				isHtml = s.fileExists(withHtml)
+			}
+			if isHtml {
+				path = withHtml
+			}
+		}
+	}
+
 	// If it's not a genuine file, then it must be index.html
-	isIndex := !s.fileExists(path)
+	isIndex := path == "" || !s.fileExists(path)
 	if isIndex {
 		if s.indexIntercept != nil {
 			s.indexIntercept(w, r)
 		}
-		s.ServeFile(w, r, "/index.html", maxAgeSeconds)
+		s.ServeFile(w, r, "index.html", maxAgeSeconds)
 		return
 	}
 
