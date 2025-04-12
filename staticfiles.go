@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -109,6 +110,37 @@ func NewCachedStaticFileServer(fsys fs.FS, fsRootDir string, apiRoutes []string,
 		indexIntercept:     indexIntercept,
 		modTime:            modTime,
 	}, nil
+}
+
+// CommonSetup is a convenience function to create a CachedStaticFileServer.
+// hotReload is true if we're running in a dev environment, and want realtime updated of changed files from hotPath. If hotReload is false, we will use embeddedFS.
+// embeddedFS is the embedded filesystem (using go:embed)
+// embeddedTopDir is the name of the embedded filesystem root (eg if you say "//go:embed www", then embeddedTopDir is "www")
+// hotPath is the relative (or absolute) path to your hot reloadable files on disk (i.e. not embedded)
+// apiRoutes is forwarded to CachedStaticFileServer
+// indexIntercept is forwarded to CachedStaticFileServer
+func NewCommonSetup(log logs.Log, hotReload bool, embeddedFS fs.FS, embeddedTopDir string, hotPath string, apiRoutes []string, indexIntercept http.HandlerFunc) (*CachedStaticFileServer, error) {
+	var fsys fs.FS
+	fsysRoot := embeddedTopDir
+	fsys = embeddedFS
+	if hotReload {
+		absRoot, err := filepath.Abs(hotPath)
+		if err != nil {
+			return nil, fmt.Errorf("Failed to resolve static file directory %v: %v. Run 'npm run build' in 'www' to build static files.", hotPath, err)
+		}
+		log.Infof("Serving static files from %v, with hot reload", absRoot)
+		fsys = os.DirFS(absRoot)
+		fsysRoot = ""
+	} else {
+		log.Infof("Serving static files from 'www' directory embedded into this binary")
+	}
+
+	flags := FlagAllowHtmlSuffixOmit
+	if !hotReload {
+		flags |= FlagImmutableFilesystem
+	}
+
+	return NewCachedStaticFileServer(fsys, fsysRoot, apiRoutes, log, indexIntercept, flags)
 }
 
 func (s *CachedStaticFileServer) ServeFile(w http.ResponseWriter, r *http.Request, relPath string, maxAgeSeconds int) {
