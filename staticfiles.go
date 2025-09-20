@@ -218,8 +218,16 @@ func (s *CachedStaticFileServer) ServeFile(w http.ResponseWriter, r *http.Reques
 			s.log.Infof("Serving uncompressed file %v", relPath)
 		}
 		w.Header().Set("Content-Type", mime.TypeByExtension(path.Ext(relPath)))
-		w.Header().Set("Content-Length", fmt.Sprintf("%v", stat.Size()))
-		io.Copy(w, file)
+		// Let http.ServeContent / underlying ResponseWriter decide Content-Length & support range requests.
+		// Avoid manually setting Content-Length before copying in case of middleware that might transform output.
+		// We still use ServeContent semantics for modTime and range support.
+		// Use a ReadSeeker. The opened file already implements it (expected *os.File), but fs.FS may not guarantee.
+		if seeker, ok := file.(io.ReadSeeker); ok {
+			http.ServeContent(w, r, relPath, modTime, seeker)
+		} else {
+			// Fallback: stream manually.
+			io.Copy(w, file)
+		}
 		return
 	}
 
@@ -266,8 +274,8 @@ func (s *CachedStaticFileServer) ServeFile(w http.ResponseWriter, r *http.Reques
 	writer, err := gzip.NewWriterLevel(&cwriter, s.compressLevel)
 	if err == nil {
 		_, err = io.Copy(writer, file)
-		if err == nil {
-			err = writer.Flush()
+		if cerr := writer.Close(); err == nil { // Close also flushes
+			err = cerr
 		}
 	}
 	cachedFile.Error = err
@@ -278,7 +286,7 @@ func (s *CachedStaticFileServer) ServeFile(w http.ResponseWriter, r *http.Reques
 	atomic.StoreInt32(&cachedFile.Ready, 1)
 
 	if s.verbose {
-		s.log.Infof("Compressing %v took %v ms", relPath, time.Now().Sub(start).Milliseconds())
+		s.log.Infof("Compressing %v took %v ms", relPath, time.Since(start).Milliseconds())
 	}
 
 	s.serveCachedFile(w, r, cachedFile, maxAgeSeconds)
@@ -323,6 +331,8 @@ func (s *CachedStaticFileServer) serveCachedFile(w http.ResponseWriter, r *http.
 
 	w.Header().Set("Content-Type", mime.TypeByExtension(path.Ext(cachedFile.Path)))
 	w.Header().Set("Content-Encoding", "gzip")
+	w.Header().Set("Vary", "Accept-Encoding")
+	// It's safe to set Content-Length because we have the full compressed bytes in memory.
 	w.Header().Set("Content-Length", fmt.Sprintf("%v", len(cachedFile.Compressed)))
 	io.Copy(w, bytes.NewReader(cachedFile.Compressed))
 }
@@ -356,10 +366,8 @@ func (s *CachedStaticFileServer) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	// Chop off leading slash
-	if strings.HasPrefix(path, "/") {
-		path = path[1:]
-	}
+	// Chop off leading slash (faster / simpler)
+	path = strings.TrimPrefix(path, "/")
 
 	if s.flags&FlagAllowHtmlSuffixOmit != 0 {
 		lastDot := strings.LastIndex(path, ".")
