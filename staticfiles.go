@@ -18,8 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cyclopcam/logs"
-	"github.com/cyclopcam/www"
+	"github.com/cyclopcam/logs/v3"
+	"github.com/cyclopcam/www/v3"
 )
 
 var reWebpackAsset *regexp.Regexp
