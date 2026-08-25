@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cyclopcam/logs/v3"
+	"github.com/cyclopcam/logs/v4"
 	"github.com/cyclopcam/www/v3"
 )
 

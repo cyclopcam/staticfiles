@@ -1,4 +1,4 @@
-github.com/cyclopcam/logs/v3 v3.0.5 h1:3wTkPTmwhuNUXSLu7Vkgnl6WI2KoY6icxgoiIW/7p+s=
-github.com/cyclopcam/logs/v3 v3.0.5/go.mod h1:lXP7Pup2E1PsSsyfwlVrqqe+xUguzYckAvoi8Su/AN4=
-github.com/cyclopcam/www/v3 v3.0.4 h1:fyJfqH+JMSQirZ+295UIHrFa/QK6Z/z2ciwkzrGbayQ=
-github.com/cyclopcam/www/v3 v3.0.4/go.mod h1:MxzW22aLZUDv2H1GDIVbfJmPcd/+5LHr39qlbxEjiH8=
+github.com/cyclopcam/logs/v4 v4.0.1 h1:wHyzP8TXQa9+I1uGDwHeIWv3mU89yk/pjYFCw+yiRoY=
+github.com/cyclopcam/logs/v4 v4.0.1/go.mod h1:4b6TW+JxylY/i5Yxi8u23x7djg42w8XxPcGosS4yIaM=
+github.com/cyclopcam/www/v3 v3.0.8 h1:028h5M00zQIqTV4SriCdYZbYlyKn5zJ1pz/v8PbSmmU=
+github.com/cyclopcam/www/v3 v3.0.8/go.mod h1:TgQK2vY6RdLVsyG3y0kYh4KXtq54FcSCzSLWjMO6low=
